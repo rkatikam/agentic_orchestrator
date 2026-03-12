@@ -41,18 +41,12 @@ class AgenticCompiler:
                 
                 # Find first available compatible node
                 assigned_node = next(
-                    (n.id for n in self.hardware_registry if n.is_available and task.compute_type in n.supported_types),
+                    (n.id for n in self.hardware_registry if task.compute_type in n.supported_types),
                     None
                 )
                 
                 if not assigned_node:
                     raise RuntimeError(f"No hardware found for task '{task_id}'")
-                    
-                # Mark node as busy
-                for node in self.hardware_registry:
-                    if node.id == assigned_node:
-                        node.is_available = False
-                        break
 
                 scheduled_tasks.append({
                     "task_id": task.id,

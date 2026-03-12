@@ -1,99 +1,72 @@
+import os
+import subprocess
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import subprocess
-import os
-import json
-import shutil
 
 app = FastAPI()
 
-SHARED_DRIVE_PATH = "/mnt/shared_storage"
-INPUT_DIR = os.path.join(SHARED_DRIVE_PATH, "inputs")
-OUTPUT_DIR = os.path.join(SHARED_DRIVE_PATH, "outputs")
-
-os.makedirs(INPUT_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Single Source of Truth: The Samba Share Root
+SHARED_PATH = "/home/lyptus/LyptusShare/AO"
 
 class TaskPayload(BaseModel):
     action: str
-    input_file: str = "source_video.mp4"
+    input_file: str = "Sample.mp4"
     target_lang: str = None
-    llm_text_data: str = None
 
 @app.post("/execute")
 def execute_edge_task(payload: TaskPayload):
-    print(f"\n[Edge Worker] Received Action: {payload.action}")
-    
+    print(f"\n[Jetson Worker] Action Received: {payload.action}")
+
+    # Define paths directly in the shared folder
+    video_path = os.path.join(SHARED_PATH, payload.input_file)
+    eng_audio = os.path.join(SHARED_PATH, "extracted_english_audio.wav")
+
     try:
-        # 1. AUDIO EXTRACTION
+        # 1. AUDIO EXTRACTION (Only happens ONCE at the start)
         if payload.action == "extract_audio":
-            input_video_path = os.path.join(INPUT_DIR, payload.input_file)
-            output_audio_path = os.path.join(OUTPUT_DIR, "extracted_english_audio.wav")
-            
+            if not os.path.exists(video_path):
+                raise FileNotFoundError(f"Input video not found: {video_path}")
+
             command = [
-                "ffmpeg", "-y", "-i", input_video_path,
+                "ffmpeg", "-y", "-i", video_path,
                 "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                output_audio_path
+                eng_audio
             ]
-            print(f"  -> Running FFmpeg extraction...")
-            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return {"status": "success", "output_pointer": output_audio_path}
+            subprocess.run(command, check=True, capture_output=True)
+            return {"status": "success", "output": eng_audio}
 
-        # 2. SUBTITLE FORMATTING
-        elif payload.action.startswith("format_srt_"):
-            output_srt_path = os.path.join(OUTPUT_DIR, f"subtitles_{payload.target_lang}.srt")
-            print(f"  -> Generating SRT file at: {output_srt_path}")
-            
-            translations = [{"start": "00:00:01,000", "end": "00:00:05,000", "text": f"Simulated {payload.target_lang} subtitle"}]
-
-            with open(output_srt_path, "w", encoding="utf-8") as srt_file:
-                for idx, block in enumerate(translations, start=1):
-                    srt_file.write(f"{idx}\n")
-                    srt_file.write(f"{block.get('start')} --> {block.get('end')}\n")
-                    srt_file.write(f"{block.get('text', '')}\n\n")
-
-            return {"status": "success", "output_pointer": output_srt_path}
-
-        # 3. TEXT-TO-SPEECH (MOCKED)
-        elif payload.action.startswith("tts_"):
-            # Mocking the AI TTS by duplicating the extracted audio so FFmpeg has a file to use
-            src_audio = os.path.join(OUTPUT_DIR, "extracted_english_audio.wav")
-            output_audio = os.path.join(OUTPUT_DIR, f"audio_{payload.target_lang}.wav")
-            print(f"  -> Generating mocked TTS audio at: {output_audio}")
-            
-            if os.path.exists(src_audio):
-                shutil.copy(src_audio, output_audio)
-            else:
-                with open(output_audio, "wb") as f: f.write(b"") # Empty file fallback
-
-            return {"status": "success", "output_pointer": output_audio}
-
-        # 4. FINAL VIDEO MERGING
+        # 2. FINAL VIDEO MERGING (Happens AFTER RTX Desktop finishes its job)
         elif payload.action.startswith("merge_video_"):
-            input_video = os.path.join(INPUT_DIR, payload.input_file)
-            input_audio = os.path.join(OUTPUT_DIR, f"audio_{payload.target_lang}.wav")
-            input_srt = os.path.join(OUTPUT_DIR, f"subtitles_{payload.target_lang}.srt")
-            output_video = os.path.join(OUTPUT_DIR, f"final_{payload.target_lang}.mp4")
+            lang = payload.target_lang
+            lang_audio = os.path.join(SHARED_PATH, f"audio_{lang}.wav")
+            lang_srt = os.path.join(SHARED_PATH, f"subtitles_{lang}.srt")
+            final_out = os.path.join(SHARED_PATH, f"final_{lang}.mp4")
 
-            print(f"  -> Muxing final video: {output_video}")
-            
-            # Merges Original Video + New Audio + New Subtitles
+            # Check if RTX Desktop actually finished the files
+            if not os.path.exists(lang_audio) or not os.path.exists(lang_srt):
+                raise FileNotFoundError(f"Missing translated assets for {lang} in {SHARED_PATH}")
+
             command = [
-                "ffmpeg", "-y",
-                "-i", input_video,
-                "-i", input_audio,
-                "-i", input_srt,
+                "ffmpeg", "-y", "-i", video_path, "-i", lang_audio, "-i", lang_srt,
                 "-map", "0:v:0", "-map", "1:a:0", "-map", "2:s:0",
-                "-c:v", "copy",
-                "-c:a", "aac",
-                "-c:s", "mov_text",
-                output_video
+                "-c:v", "copy", "-c:a", "aac", "-c:s", "mov_text",
+                final_out
             ]
-            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return {"status": "success", "output_pointer": output_video}
+            subprocess.run(command, check=True, capture_output=True)
+            return {"status": "success", "output": final_out}
 
         else:
-            raise ValueError(f"Action '{payload.action}' is not supported.")
+            raise ValueError(f"Action '{payload.action}' is handled by the RTX Desktop, not Jetson.")
 
     except Exception as e:
+        print(f"ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+if __name__=="__main__":
+    import uvicorn
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=5000)
+    args = parser.parse_args()
+    uvicorn.run(app, host="0.0.0.0", port=args.port)
+

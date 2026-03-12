@@ -3,6 +3,8 @@ import json
 from core.models import Task, HardwareNode
 from core.compiler import AgenticCompiler
 from runtime.orchestrator import ExecutionEngine
+DESKTOP_IP="192.168.20.58"
+JETSON_IP="192.168.20.143"
 
 CLUSTER = [
     HardwareNode("rtx_5060ti", ["llm_heavy", "ai_inference_light"]),
@@ -12,10 +14,10 @@ CLUSTER = [
 ]
 
 ENDPOINTS = {
-    "rtx_5060ti": "http://192.168.1.100:8000/v1/completions",
-    "intel_b60": "http://192.168.1.101:8000/v1/completions",
-    "jetson_nano_1": "http://192.168.1.102:5000/execute",
-    "jetson_nano_2": "http://192.168.1.103:5000/execute"
+    "rtx_5060ti": f"http://{DESKTOP_IP}:8000/v1/completions",
+    "intel_b60": f"http://{DESKTOP_IP}:8001/v1/completions",
+    "jetson_nano_1": f"http://{JETSON_IP}:5000/execute",
+    #"jetson_nano_2": "http://192.168.1.103:5000/execute"
 }
 
 # Base Extraction
@@ -30,13 +32,13 @@ LANGUAGES = ["hi", "te", "fr", "es", "de"]
 for lang in LANGUAGES:
     # LLM Translation
     WORKFLOW[f"translate_{lang}"] = Task(f"translate_{lang}", "llm_heavy", deps=["transcribe_eng"], target_lang=lang)
-    
+
     # Text Processing (Subtitles)
-    WORKFLOW[f"format_srt_{lang}"] = Task(f"format_srt_{lang}", "cpu_scalar", deps=[f"translate_{lang}"], target_lang=lang)
-    
+    WORKFLOW[f"format_srt_{lang}"] = Task(f"format_srt_{lang}", "ai_inference_light", deps=[f"translate_{lang}"], target_lang=lang)
+
     # Audio Processing (TTS - routed to edge for our mock)
-    WORKFLOW[f"tts_{lang}"] = Task(f"tts_{lang}", "cpu_scalar", deps=[f"translate_{lang}"], target_lang=lang)
-    
+    WORKFLOW[f"tts_{lang}"] = Task(f"tts_{lang}", "ai_inference_light", deps=[f"translate_{lang}"], target_lang=lang)
+
     # Final Video Merge (Waits for both Audio and Subtitles to finish)
     WORKFLOW[f"merge_video_{lang}"] = Task(f"merge_video_{lang}", "io_bound", deps=[f"format_srt_{lang}", f"tts_{lang}"], target_lang=lang)
 
