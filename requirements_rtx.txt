@@ -1,0 +1,14 @@
+# Orchestrator Dependencies
+aiohttp==3.9.3
+
+# vLLM Engine
+vllm==0.3.3
+
+# Whisper & TTS Server Dependencies
+fastapi==0.110.0
+uvicorn==0.27.1
+pydantic==2.6.3
+faster-whisper==1.0.1
+edge-tts==6.1.9
+pydub==0.25.1
+pysrt==1.1.2
